@@ -1,0 +1,10 @@
+{
+  "name": "senoss-webui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "serve -s build -l 3000",
+    "build": "echo 'placeholder build' > build/index.html"
+  },
+  "dependencies": {}
+}

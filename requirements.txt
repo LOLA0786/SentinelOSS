@@ -3,3 +3,13 @@ uvicorn
 python-jose
 streamlit
 pytest
+sqlalchemy
+python-dotenv
+python-multipart
+python-jose
+python-dateutil
+requests
+psutil
+boto3
+serve
+PyYAML
