@@ -1,11 +1,12 @@
-set -euo pipefail
+# ============================================
+# SAFE ALLALL++ UPGRADE SCRIPT
+# ============================================
 
-# working dir check
 ROOT=$(pwd)
 echo "Applying ALLALL++ safe upgrades in $ROOT"
 
 # ---------------------------
-# 0. create directories
+# CREATE DIRECTORIES
 # ---------------------------
 mkdir -p senoss_core/soar
 mkdir -p senoss_core/osmon
@@ -19,10 +20,11 @@ mkdir -p webui
 mkdir -p infra
 mkdir -p demos
 
+
 # ---------------------------
-# 1. SOAR: playbooks + action adapters
+# 1. SOAR PLAYBOOK ENGINE
 # ---------------------------
-cat > senoss_core/soar/playbook.py <<'PY'
+cat > senoss_core/soar/playbook.py << 'EOF2'
 from typing import Dict, Callable, List
 
 class PlaybookStep:
@@ -45,32 +47,32 @@ class Playbook:
             try:
                 res = s.action(ctx) or {}
                 results.append({s.name: res})
-                ctx.update(res if isinstance(res, dict) else {})
+                if isinstance(res, dict):
+                    ctx.update(res)
             except Exception as e:
                 results.append({s.name: {"error": str(e)}})
         return {"playbook": self.name, "results": results}
-# sample actions (safe)
+
 def action_block_ip(ctx):
-    ip = ctx.get("ip")
-    # NOTE: actual blocking (firewall calls) should be added by operator
-    return {"blocked": ip}
+    return {"blocked": ctx.get("ip")}
+
 def action_create_ticket(ctx):
-    return {"ticket_id": "T-"+(ctx.get("incident_id","0"))}
-PY
+    return {"ticket": "T-" + ctx.get("incident_id", "0")}
+EOF2
 
-cat > senoss_core/soar/__init__.py <<'PY'
+cat > senoss_core/soar/__init__.py << 'EOF2'
 from .playbook import Playbook, PlaybookStep, action_block_ip, action_create_ticket
-PY
+EOF2
+
 
 # ---------------------------
-# 2. OS Monitor (user-space, cross-platform safe monitors)
+# 2. OS MONITOR
 # ---------------------------
-cat > senoss_core/osmon/simple_watch.py <<'PY'
-import psutil, time, threading, os
-from typing import Callable
+cat > senoss_core/osmon/simple_watch.py << 'EOF2'
+import psutil, time, threading
 
 class SimpleOSMonitor:
-    def __init__(self, cb: Callable[[dict], None], interval: float = 2.0):
+    def __init__(self, cb, interval=2):
         self.cb = cb
         self.interval = interval
         self._stop = threading.Event()
@@ -87,90 +89,78 @@ class SimpleOSMonitor:
     def _run(self):
         while not self._stop.is_set():
             try:
-                metrics = {
-                    "cpu_percent": psutil.cpu_percent(interval=None),
-                    "mem_percent": psutil.virtual_memory().percent,
-                    "process_count": len(psutil.pids()),
+                data = {
+                    "cpu": psutil.cpu_percent(),
+                    "mem": psutil.virtual_memory().percent,
+                    "procs": len(psutil.pids()),
                 }
-                self.cb(metrics)
-            except Exception:
+                self.cb(data)
+            except:
                 pass
             time.sleep(self.interval)
-PY
+EOF2
 
-cat > senoss_core/osmon/__init__.py <<'PY'
+cat > senoss_core/osmon/__init__.py << 'EOF2'
 from .simple_watch import SimpleOSMonitor
-PY
+EOF2
+
 
 # ---------------------------
-# 3. Model Guard (LLM I/O filtering, jailbreak heuristics, rate-limits)
+# 3. MODEL GUARD
 # ---------------------------
-cat > senoss_core/modelguard/filtering.py <<'PY'
-from typing import Dict, Optional
-import time, hashlib
-
-# Simple in-memory rate limiter & heuristics
+cat > senoss_core/modelguard/filtering.py << 'EOF2'
 class ModelGuard:
     def __init__(self):
-        self.recent = {}
-        self.blocked_patterns = ["bypass safety", "ignore instructions", "password", "crack", "exploit"]
+        self.bad_patterns = ["bypass", "ignore safety", "exploit", "crack"]
 
-    def check_input(self, prompt: str, client_id: Optional[str]=None):
-        key = (client_id or "anon") + "|" + hashlib.sha256(prompt.encode()).hexdigest()[:8]
-        now = time.time()
-        self.recent.setdefault(key, now)
-        # heuristic matching
-        low = prompt.lower()
-        for p in self.blocked_patterns:
+    def check_input(self, text):
+        low = text.lower()
+        for p in self.bad_patterns:
             if p in low:
-                return {"allow": False, "reason": "policy-match"}
+                return {"allow": False, "reason": "blocked-pattern"}
         return {"allow": True}
 
-    def check_output(self, text: str):
-        # ensure outputs do not contain sensitive patterns
-        for p in ["ssh ", "eval(", "os.system", "rm -rf"]:
+    def check_output(self, text):
+        for p in ["rm -rf", "ssh ", "eval("]:
             if p in text:
                 return {"safe": False, "reason": "unsafe-output"}
         return {"safe": True}
-PY
+EOF2
 
-cat > senoss_core/modelguard/__init__.py <<'PY'
+cat > senoss_core/modelguard/__init__.py << 'EOF2'
 from .filtering import ModelGuard
-PY
+EOF2
+
 
 # ---------------------------
-# 4. Supervisor Agent / Multi-Agent runtime (safe orchestration)
+# 4. SUPERVISOR AGENT
 # ---------------------------
-cat > senoss_core/agents/supervisor/supervisor.py <<'PY'
-import uuid, asyncio, time
+cat > senoss_core/agents/supervisor/supervisor.py << 'EOF2'
+import uuid, time, asyncio
 from senoss_core.graph import get_bus
 
 class SupervisorAgent:
     def __init__(self):
-        self.id = "supervisor-"+uuid.uuid4().hex[:6]
+        self.id = "supervisor-" + uuid.uuid4().hex[:6]
         self.bus = get_bus()
 
-    async def handle(self, message):
-        # simple policy: if event type is ioc_match, escalate
-        t = message.get("type")
+    async def handle(self, msg):
+        t = msg.get("type")
         if t == "ioc_match":
-            await self.bus.publish("alerts", {"from": self.id, "alert": message})
-        # record heartbeat
+            await self.bus.publish("alerts", {"alert": msg})
         await self.bus.publish("heartbeat", {"agent": self.id, "ts": time.time()})
-PY
+EOF2
 
-cat > senoss_core/agents/supervisor/__init__.py <<'PY'
+cat > senoss_core/agents/supervisor/__init__.py << 'EOF2'
 from .supervisor import SupervisorAgent
-PY
+EOF2
+
 
 # ---------------------------
-# 5. YARA stub integration & advanced intel helpers
+# 5. YARA SAFE STUBS
 # ---------------------------
-cat > senoss_core/intel/yara/loader.py <<'PY'
-# This is a safe YARA rule loader stub.
-# Real YARA scanning requires 'yara' package and user-supplied rules. We do not ship malicious rules.
+cat > senoss_core/intel/yara/loader.py << 'EOF2'
 from pathlib import Path
-import json
 
 RULE_DIR = Path("senoss_core/intel/yara/rules")
 RULE_DIR.mkdir(parents=True, exist_ok=True)
@@ -178,221 +168,136 @@ RULE_DIR.mkdir(parents=True, exist_ok=True)
 def list_rules():
     return [p.name for p in RULE_DIR.glob("*.yara")]
 
-def add_placeholder_rule(name: str, content: str):
-    p = RULE_DIR / (name + ".yara")
-    p.write_text(content)
-    return p.as_posix()
+def add_rule(name, body):
+    fp = RULE_DIR / f"{name}.yara"
+    fp.write_text(body)
+    return fp.as_posix()
+EOF2
 
-def load_rules():
-    return list_rules()
-PY
+cat > senoss_core/intel/yara/__init__.py << 'EOF2'
+from .loader import list_rules, add_rule
+EOF2
 
-cat > senoss_core/intel/yara/__init__.py <<'PY'
-from .loader import list_rules, add_placeholder_rule, load_rules
-PY
 
 # ---------------------------
-# 6. Cloud connectors (read-only checks: AWS S3 list buckets, GCP/Azure stubs)
+# 6. CLOUD CONNECTOR (READ ONLY)
 # ---------------------------
-cat > senoss_core/cloud/aws_audit.py <<'PY'
-# Safe, read-only AWS checks. Requires AWS credentials if used.
+cat > senoss_core/cloud/aws_audit.py << 'EOF2'
 import boto3, botocore
 
 def list_s3_buckets():
     try:
-        s3 = boto3.client("s3")
-        resp = s3.list_buckets()
-        return {"buckets": [b["Name"] for b in resp.get("Buckets", [])]}
+        cli = boto3.client("s3")
+        r = cli.list_buckets()
+        return {"buckets": [b["Name"] for b in r.get("Buckets",[])]}
     except botocore.exceptions.NoCredentialsError:
         return {"error": "no-aws-creds"}
     except Exception as e:
         return {"error": str(e)}
-PY
+EOF2
 
-cat > senoss_core/cloud/__init__.py <<'PY'
+cat > senoss_core/cloud/__init__.py << 'EOF2'
 from .aws_audit import list_s3_buckets
-PY
+EOF2
+
 
 # ---------------------------
-# 7. Identity & Access Layer (behavioral risk scoring)
+# 7. IDENTITY RISK ENGINE
 # ---------------------------
-cat > senoss_core/identity/risk.py <<'PY'
-import time, hashlib
+cat > senoss_core/identity/risk.py << 'EOF2'
+import time
 
 class IdentityRiskEngine:
-    def __init__(self):
-        self.sessions = {}
+    def score(self, user, event):
+        score = 50
+        if event.get("unusual_location"): score += 25
+        if event.get("fast_activity"): score += 10
+        if event.get("suspicious_cmd"): score += 15
+        return {"user": user, "risk": min(score,100), "ts": time.time()}
+EOF2
 
-    def score_event(self, user_id: str, event: dict):
-        # naive behavioral score
-        key = user_id
-        base = 50
-        if event.get("unusual_location"): base += 25
-        if event.get("suspicious_cmd"): base += 30
-        if event.get("fast_activity"): base += 15
-        return {"user": user_id, "risk_score": min(100, base), "ts": time.time()}
-PY
-
-cat > senoss_core/identity/__init__.py <<'PY'
+cat > senoss_core/identity/__init__.py << 'EOF2'
 from .risk import IdentityRiskEngine
-PY
+EOF2
+
 
 # ---------------------------
-# 8. Containment sandbox improvements (enhanced docker runner + logging)
+# 8. CONTAINMENT SANDBOX
 # ---------------------------
-cat > senoss_core/containment/docker_sandbox.py <<'PY'
-import subprocess, shlex, uuid, time, json
-from typing import Dict
+cat > senoss_core/containment/docker_sandbox.py << 'EOF2'
+import subprocess, shlex, uuid
 
-def run_safe_container(cmd: str, timeout: int = 10):
-    # non-privileged ephemeral container; network disabled
-    cid = "senoss-sbox-" + uuid.uuid4().hex[:8]
-    full = f"docker run --rm --name {cid} --network none --pids-limit 64 --cpus=0.5 --memory=256m alpine:3.18 sh -c {shlex.quote(cmd)}"
+def run_safe_container(cmd):
+    cid = "safe-" + uuid.uuid4().hex[:6]
+    run = f"docker run --rm --name {cid} --network none alpine:3.18 sh -c {shlex.quote(cmd)}"
     try:
-        p = subprocess.run(full, shell=True, capture_output=True, text=True, timeout=timeout)
-        return {"exit_code": p.returncode, "stdout": p.stdout, "stderr": p.stderr}
-    except subprocess.TimeoutExpired:
-        return {"exit_code": -1, "stderr": "timeout"}
-PY
+        p = subprocess.run(run, shell=True, capture_output=True, text=True, timeout=10)
+        return {"code": p.returncode, "out": p.stdout, "err": p.stderr}
+    except Exception as e:
+        return {"error": str(e)}
+EOF2
 
-cat > senoss_core/containment/__init__.py <<'PY'
+cat > senoss_core/containment/__init__.py << 'EOF2'
 from .docker_sandbox import run_safe_container
-PY
+EOF2
+
 
 # ---------------------------
-# 9. Security Copilot UI (simple React placeholder + static server)
+# 9. WEB UI PLACEHOLDER
 # ---------------------------
-cat > webui/package.json <<'JSON'
-{
-  "name": "senoss-webui",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "start": "serve -s build -l 3000",
-    "build": "echo 'placeholder build' > build/index.html"
-  },
-  "dependencies": {}
-}
-JSON
+cat > webui/index.html << 'EOF2'
+<!doctype html>
+<html>
+  <body>
+    <h2>senoss - Security Copilot</h2>
+    <p>Placeholder UI loaded.</p>
+  </body>
+</html>
+EOF2
 
-cat > webui/README.md <<'MD'
-Simple placeholder web UI. Run in root: (requires node/npm if you want to expand)
-  cd webui
-  npm install -g serve
-  npm run build
-  npm start
-MD
 
 # ---------------------------
-# 10. Demos: safe red-team simulation (NO exploit code)
+# 10. SAFE REDTEAM SIM
 # ---------------------------
-cat > demos/safe_redteam_sim.py <<'PY'
-# Safe red-team simulation: generates synthetic IOCs and sequences for testing defensive playbooks.
+cat > demos/safe_redteam_sim.py << 'EOF2'
 import asyncio, random, time
 from senoss_core.threatintel import load_iocs
-from senoss_core.graph import get_bus
 from senoss_core.events import publish_event
 
-async def run_demo(rounds=5, interval=1):
-    bus = get_bus()
+async def run_sim(rounds=5):
     iocs = load_iocs()
-    for i in range(rounds):
+    for _ in range(rounds):
         pick = random.choice(iocs)
-        evt = {"type":"simulated_ioc","ioc": pick, "ts": time.time()}
-        # publish via bus -> will be picked up by supervisor or UI
-        await publish_event(evt)
-        await asyncio.sleep(interval)
+        await publish_event({"type":"simulated_ioc","ioc":pick,"ts":time.time()})
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
-    asyncio.run(run_demo())
-PY
+    asyncio.run(run_sim())
+EOF2
+
 
 # ---------------------------
-# 11. Infra helpers: dockerfile + compose ensure
+# UPDATE REQUIREMENTS
 # ---------------------------
-cat > infra/Dockerfile.api <<'DOCK'
-FROM python:3.11-slim
-WORKDIR /app
-COPY . /app
-RUN pip install --no-cache-dir -r requirements.txt
-EXPOSE 8000
-CMD ["uvicorn", "senoss_core.api.extended_server_full:app", "--host", "0.0.0.0", "--port", "8000"]
-DOCK
-
-cat > infra/docker-compose.override.yml <<'YML'
-version: "3.9"
-services:
-  api:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.api
-    ports:
-      - "8000:8000"
-YML
-
-# ---------------------------
-# 12. Update requirements
-# ---------------------------
-cat > requirements.txt <<'REQ'
+cat > requirements.txt << 'EOF2'
 fastapi
 uvicorn
 python-jose
-streamlit
 pytest
 sqlalchemy
-python-dotenv
-python-multipart
-python-jose
-python-dateutil
-requests
 psutil
 boto3
-serve
-PyYAML
-REQ
+requests
+EOF2
+
 
 # ---------------------------
-# 13. Lightweight docs and run helpers
-# ---------------------------
-cat > RUN_NOTES.md <<'MD'
-ALLALL++ safe upgrade applied.
-
-Omitted (refused) components:
- - exploit generation / automation
- - synthetic malware generator
- - automated adversarial prompt attack generator
-
-These are refused for safety; use simulation stubs instead.
-
-Safe commands:
- - start api: uvicorn senoss_core.api.extended_server_full:app --host 0.0.0.0 --port 8000
- - run demo sim: python3 demos/safe_redteam_sim.py
-MD
-
-# ---------------------------
-# 14. Tests additions
-# ---------------------------
-cat > tests/test_soar.py <<'PY'
-from senoss_core.soar import Playbook, PlaybookStep, action_block_ip
-def test_playbook():
-    pb = Playbook("p")
-    pb.add_step(PlaybookStep("s1", lambda ctx: {"a":1}))
-    res = pb.run({"incident_id":"42"})
-    assert "results" in res
-PY
-
-# ---------------------------
-# 15. Git commit & push
+# GIT COMMIT + PUSH
 # ---------------------------
 git add -A
-git commit -m "ALLALL++ safe: SOAR, OS monitor, model guard, supervisor, YARA stubs, cloud connectors, identity, containment, copilot UI stub, safe red-team sim"
+git commit -m "ALLALL++ safe expansion applied"
 git push
 
-echo "SAFE ALLALL++ applied. Refused exploit/malware features. Use simulations instead."
+echo "SAFE ALLALL++ UPGRADE COMPLETED"
 set -euo pipefail
-
-ROOT=$(pwd)
-echo "Running ALLALL++ safe upgrade in $ROOT"
-
-# ---------- (SCRIPT CONTENT WILL BE INSERTED BELOW AUTOMATICALLY) ----------
-
+...

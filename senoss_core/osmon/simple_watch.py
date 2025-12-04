@@ -1,8 +1,7 @@
-import psutil, time, threading, os
-from typing import Callable
+import psutil, time, threading
 
 class SimpleOSMonitor:
-    def __init__(self, cb: Callable[[dict], None], interval: float = 2.0):
+    def __init__(self, cb, interval=2):
         self.cb = cb
         self.interval = interval
         self._stop = threading.Event()
@@ -19,12 +18,12 @@ class SimpleOSMonitor:
     def _run(self):
         while not self._stop.is_set():
             try:
-                metrics = {
-                    "cpu_percent": psutil.cpu_percent(interval=None),
-                    "mem_percent": psutil.virtual_memory().percent,
-                    "process_count": len(psutil.pids()),
+                data = {
+                    "cpu": psutil.cpu_percent(),
+                    "mem": psutil.virtual_memory().percent,
+                    "procs": len(psutil.pids()),
                 }
-                self.cb(metrics)
-            except Exception:
+                self.cb(data)
+            except:
                 pass
             time.sleep(self.interval)

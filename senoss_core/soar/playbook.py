@@ -20,14 +20,14 @@ class Playbook:
             try:
                 res = s.action(ctx) or {}
                 results.append({s.name: res})
-                ctx.update(res if isinstance(res, dict) else {})
+                if isinstance(res, dict):
+                    ctx.update(res)
             except Exception as e:
                 results.append({s.name: {"error": str(e)}})
         return {"playbook": self.name, "results": results}
-# sample actions (safe)
+
 def action_block_ip(ctx):
-    ip = ctx.get("ip")
-    # NOTE: actual blocking (firewall calls) should be added by operator
-    return {"blocked": ip}
+    return {"blocked": ctx.get("ip")}
+
 def action_create_ticket(ctx):
-    return {"ticket_id": "T-"+(ctx.get("incident_id","0"))}
+    return {"ticket": "T-" + ctx.get("incident_id", "0")}
