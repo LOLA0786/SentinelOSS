@@ -1,1 +1,2 @@
-# add python deps here
+fastapi
+uvicorn
