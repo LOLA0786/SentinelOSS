@@ -4,4 +4,9 @@ services:
     build: .
     ports:
       - "8000:8000"
-    command: uvicorn senoss_core.api.server:app --host 0.0.0.0 --port 8000
+    command: uvicorn senoss_core.api.extended_server:app --host 0.0.0.0 --port 8000
+  ui:
+    build: .
+    ports:
+      - "8501:8501"
+    command: streamlit run ui_dashboard.py --server.port 8501 --server.address 0.0.0.0

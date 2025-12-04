@@ -1,2 +1,5 @@
 fastapi
 uvicorn
+python-jose
+streamlit
+pytest

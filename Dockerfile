@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY . /app
-RUN pip install -r requirements.txt || true
-CMD ["python3"]
+RUN pip install --no-cache-dir -r requirements.txt
+EXPOSE 8000 8501
+CMD ["uvicorn", "senoss_core.api.extended_server:app", "--host", "0.0.0.0", "--port", "8000"]
